@@ -44,6 +44,7 @@ auth.set_access_token(access_token, access_secret)
 api = tweepy.API(auth_handler=auth)
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("APP_SECRET")
 
 def save_media(filename, raw_data):
     if not os.path.exists('tmp'):
