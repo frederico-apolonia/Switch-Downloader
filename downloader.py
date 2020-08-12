@@ -5,11 +5,13 @@ import shutil
 
 import tweepy
 import requests
+import flask
 from flask import Flask
 
 # Google Drive API
 from googleapiclient.discovery import build
-from google_auth_oauthlib.flow import InstalledAppFlow
+import google_auth_oauthlib.flow
+# from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.http import MediaFileUpload
 
@@ -94,6 +96,50 @@ def get_game_name(tweet_hashtags):
         return tweet_hashtags[0]['text']
     else:
         return tweet_hashtags[1]['text']
+    
+@app.route('/authorize')
+def authorize():
+    # Create a flow instance to manage the OAuth 2.0 Authorization Grant Flow
+    # steps.
+    flow = google_auth_oauthlib.flow.Flow.from_client_secrets_file(
+        'credentials.json', scopes=SCOPES)
+    flow.redirect_uri = flask.url_for('oauth2callback', _external=True)
+    authorization_url, state = flow.authorization_url(
+        # This parameter enables offline access which gives your application
+        # both an access and refresh token.
+        access_type='offline',
+        # This parameter enables incremental auth.
+        include_granted_scopes='true')
+
+    # Store the state in the session so that the callback can verify that
+    # the authorization server response.
+    flask.session['state'] = state
+
+    return flask.redirect(authorization_url)
+
+@app.route('/oauth2callback')
+def oauth2callback():
+    # Specify the state when creating the flow in the callback so that it can
+    # verify the authorization server response.
+    state = flask.session['state']
+    flow = google_auth_oauthlib.flow.Flow.from_client_secrets_file(
+        'credentials.json', scopes=SCOPES, state=state)
+    flow.redirect_uri = flask.url_for('oauth2callback', _external=True)
+
+    # Use the authorization server's response to fetch the OAuth 2.0 tokens.
+    authorization_response = flask.request.url
+    flow.fetch_token(authorization_response=authorization_response)
+
+    # Store the credentials in the session.
+    # ACTION ITEM for developers:
+    #     Store user's access and refresh tokens in your data store if
+    #     incorporating this code into your real app.
+    credentials = flow.credentials
+    
+    with open('token.pickle', 'wb') as token:
+        pickle.dump(credentials, token)
+
+    return 'OK'
 
 def get_gdrive_service():
     creds = None
@@ -108,16 +154,8 @@ def get_gdrive_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                'credentials.json', SCOPES)
-            creds = flow.run_local_server(
-                    host=host_url,
-                    port=8088,
-                    authorization_prompt_message='Please visit this URL: {url}',
-                    success_message='The auth flow is complete; you may close this window.',
-                    open_browser=True
-                )
-            # creds = flow.run_local_server(port=0)
+            # Login required.
+            return None
         # Save the credentials for the next run
         with open('token.pickle', 'wb') as token:
             pickle.dump(creds, token)
@@ -151,6 +189,8 @@ def upload_files(files):
     print("Uploading the following files: " + str(files))
     # authenticate the user
     gdrive_service = get_gdrive_service()
+
+    assert gdrive_service is not None
 
     # check if folder exists, if so, grab the id and continue, else create it
     folder_id = get_folder_id(gdrive_service)
