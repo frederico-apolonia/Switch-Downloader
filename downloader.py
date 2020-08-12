@@ -225,6 +225,7 @@ def upload_files(files):
                                     media_body=media,
                                     fields='id').execute()
         result.append(f'Uploaded {filename}')
+    return result
 
 def clean_tmp():
     if os.path.exists('tmp'):
