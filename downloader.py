@@ -27,6 +27,13 @@ access_secret = os.environ.get("ACCESS_TOKEN_SECRET")
 
 screenshots_save_folder = os.environ.get("GDRIVE_FOLDER_NAME")
 
+def get_and_save_credentials():
+    json = os.environ.get("GDRIVE_CREDENTIALS")
+    with open('credentials.json', 'w') as f:
+        f.write(json)
+
+get_and_save_credentials()
+
 auth = tweepy.OAuthHandler(consumer_key, consumer_secret)
 auth.set_access_token(access_token, access_secret)
 
