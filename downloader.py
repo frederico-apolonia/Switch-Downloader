@@ -22,26 +22,40 @@ SCOPES = [
     'https://www.googleapis.com/auth/drive.file',
     ]
 
+print("Checking if all required environment variables are set")
+mandatory_vars = ['API_KEY', 'API_SECRET_KEY', 'ACCESS_TOKEN', 'ACCESS_TOKEN_SECRET', 'GDRIVE_FOLDER_NAME']
+for var in mandatory_vars:
+    if var not in os.environ:
+        raise EnvironmentError(f"Failed because {var} is not set.")
+
 consumer_key = os.environ.get("API_KEY")
 consumer_secret = os.environ.get("API_SECRET_KEY")
 access_token = os.environ.get("ACCESS_TOKEN")
 access_secret = os.environ.get("ACCESS_TOKEN_SECRET")
 
 screenshots_save_folder = os.environ.get("GDRIVE_FOLDER_NAME")
-
-host_url = os.environ.get("HOST_URL", "localhost")
+print("All environment variables are set.")
 
 def get_and_save_credentials():
-    json = os.environ.get("GDRIVE_CREDENTIALS")
-    with open('credentials.json', 'w') as f:
-        f.write(json)
+    if not os.path.exists('credentials.json'):
+        if 'GDRIVE_CREDENTIALS' not in os.environ:
+            raise EnvironmentError(f"Failed to fetch Google Drive credentials because GDRIVE_CREDENTIALS is not set.")
+        json = os.environ.get("GDRIVE_CREDENTIALS")
+        with open('credentials.json', 'w') as f:
+            f.write(json)
+        print("Fetched and saved credentials.json")
+    else:
+        print("credentials.json is already present.")
 
+print("Checking if Google Drive credentials are set")
 get_and_save_credentials()
 
+print("Authenticating the Twitter API")
 auth = tweepy.OAuthHandler(consumer_key, consumer_secret)
 auth.set_access_token(access_token, access_secret)
 
 api = tweepy.API(auth_handler=auth)
+print("Twitter API authenticated")
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("APP_SECRET")
@@ -190,8 +204,9 @@ def upload_files(files):
     print("Uploading the following files: " + str(files))
     # authenticate the user
     gdrive_service = get_gdrive_service()
-
-    assert gdrive_service is not None
+    if gdrive_service is None:
+        print("Failed to authenticate the user in Google Drive!")
+        return ['Failed to authenticate user in Google Drive']
 
     # check if folder exists, if so, grab the id and continue, else create it
     folder_id = get_folder_id(gdrive_service)
@@ -199,6 +214,7 @@ def upload_files(files):
     if folder_id is None:
         folder_id = create_gdrive_folder(gdrive_service)
 
+    result = []
     for filename, content_type in files:
         file_metadata = {
             'name': filename,
@@ -208,6 +224,7 @@ def upload_files(files):
         gdrive_service.files().create(body=file_metadata,
                                     media_body=media,
                                     fields='id').execute()
+        result.append(f'Uploaded {filename}')
 
 def clean_tmp():
     if os.path.exists('tmp'):
@@ -217,10 +234,13 @@ def clean_tmp():
 @app.route('/<string:delete_tweet>', methods=['POST'])
 def download_new_tweet_media(delete_tweet):
     delete_tweet = bool(delete_tweet)
+    print(f"Received request to download tweet media, delete tweet after deleting? {delete_tweet}")
     tweets = api.user_timeline(count=3)
     files = []
     for t in tweets:
         files += get_tweet_media(t, delete_tweet=delete_tweet)
-    upload_files(files)
+    print(f"Retrieved the following media: {files}")
+    result = upload_files(files)
+    print("Files uploaded, cleaning tmp folder.")
     clean_tmp()
-    return 'OK'
+    return '\n'.join(result)
