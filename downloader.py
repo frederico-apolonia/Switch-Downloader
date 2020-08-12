@@ -27,6 +27,8 @@ access_secret = os.environ.get("ACCESS_TOKEN_SECRET")
 
 screenshots_save_folder = os.environ.get("GDRIVE_FOLDER_NAME")
 
+host_url = os.environ.get("HOST_URL", "localhost")
+
 def get_and_save_credentials():
     json = os.environ.get("GDRIVE_CREDENTIALS")
     with open('credentials.json', 'w') as f:
@@ -108,7 +110,14 @@ def get_gdrive_service():
         else:
             flow = InstalledAppFlow.from_client_secrets_file(
                 'credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
+            creds = flow.run_local_server(
+                    host=host_url,
+                    port=8088,
+                    authorization_prompt_message='Please visit this URL: {url}',
+                    success_message='The auth flow is complete; you may close this window.',
+                    open_browser=True
+                )
+            # creds = flow.run_local_server(port=0)
         # Save the credentials for the next run
         with open('token.pickle', 'wb') as token:
             pickle.dump(creds, token)
