@@ -127,3 +127,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Misc - for safety
+keys.txt
+credentials.json
+tmp/
+token.pickle
