@@ -15,7 +15,10 @@ import google_auth_oauthlib.flow
 from google.auth.transport.requests import Request
 from googleapiclient.http import MediaFileUpload
 
-switch_hastag = "NintendoSwitch"
+SWITCH_HASTAG = "NintendoSwitch"
+DRIVE_CREDENTIALS_FILE = 'credentials.json'
+
+SUCCESS_STATUS = 200
 
 SCOPES = [
     'https://www.googleapis.com/auth/drive.metadata.readonly',
@@ -36,19 +39,19 @@ access_secret = os.environ.get("ACCESS_TOKEN_SECRET")
 screenshots_save_folder = os.environ.get("GDRIVE_FOLDER_NAME")
 print("All environment variables are set.")
 
-def get_and_save_credentials():
-    if not os.path.exists('credentials.json'):
+def get_and_save_gdrive_credentials():
+    if not os.path.exists(DRIVE_CREDENTIALS_FILE):
         if 'GDRIVE_CREDENTIALS' not in os.environ:
             raise EnvironmentError(f"Failed to fetch Google Drive credentials because GDRIVE_CREDENTIALS is not set.")
         json = os.environ.get("GDRIVE_CREDENTIALS")
-        with open('credentials.json', 'w') as f:
+        with open(DRIVE_CREDENTIALS_FILE, 'w') as f:
             f.write(json)
         print("Fetched and saved credentials.json")
     else:
         print("credentials.json is already present.")
 
 print("Checking if Google Drive credentials are set")
-get_and_save_credentials()
+get_and_save_gdrive_credentials()
 
 print("Authenticating the Twitter API")
 auth = tweepy.OAuthHandler(consumer_key, consumer_secret)
@@ -91,7 +94,7 @@ def get_tweet_media(tweet_status, delete_tweet=False):
             file_extension = media_url.split('/')[-1].split('.')[-1][:3]
             filename = "-".join([game_name, current_time.strftime("%d-%m-%Y-%H%M%S"), str(count)]) + '.' + file_extension
             request = requests.get(media_url, stream=True)
-            if request.status_code == 200:
+            if request.status_code == SUCCESS_STATUS:
                 request.raw.decode_content = True
                 save_media(filename, request.raw)
                 result.append((filename, request.headers['content-type']))
@@ -102,7 +105,7 @@ def get_tweet_media(tweet_status, delete_tweet=False):
 
 def verify_hastag_in_hashtags(tweet_hashtags):
     for hashtag in tweet_hashtags:
-        if hashtag['text'] == switch_hastag:
+        if hashtag['text'] == SWITCH_HASTAG:
             return True
     return False
 
@@ -117,7 +120,7 @@ def authorize():
     # Create a flow instance to manage the OAuth 2.0 Authorization Grant Flow
     # steps.
     flow = google_auth_oauthlib.flow.Flow.from_client_secrets_file(
-        'credentials.json', scopes=SCOPES)
+        DRIVE_CREDENTIALS_FILE, scopes=SCOPES)
     flow.redirect_uri = flask.url_for('oauth2callback', _external=True)
     authorization_url, state = flow.authorization_url(
         # This parameter enables offline access which gives your application
@@ -138,7 +141,7 @@ def oauth2callback():
     # verify the authorization server response.
     state = flask.session['state']
     flow = google_auth_oauthlib.flow.Flow.from_client_secrets_file(
-        'credentials.json', scopes=SCOPES, state=state)
+        DRIVE_CREDENTIALS_FILE, scopes=SCOPES, state=state)
     flow.redirect_uri = flask.url_for('oauth2callback', _external=True)
 
     # Use the authorization server's response to fetch the OAuth 2.0 tokens.
@@ -206,7 +209,7 @@ def upload_files(files):
     gdrive_service = get_gdrive_service()
     if gdrive_service is None:
         print("Failed to authenticate the user in Google Drive!")
-        return ['Failed to authenticate user in Google Drive']
+        return ['Failed to authenticate user in Google Drive, login required.']
 
     # check if folder exists, if so, grab the id and continue, else create it
     folder_id = get_folder_id(gdrive_service)
@@ -227,7 +230,7 @@ def upload_files(files):
         result.append(f'Uploaded {filename}')
     return result
 
-def clean_tmp():
+def remove_tmp_directory():
     if os.path.exists('tmp'):
         shutil.rmtree('tmp')
 
@@ -243,5 +246,11 @@ def download_new_tweet_media(delete_tweet):
     print(f"Retrieved the following media: {files}")
     result = upload_files(files)
     print("Files uploaded, cleaning tmp folder.")
-    clean_tmp()
+    remove_tmp_directory()
     return '\n'.join(result)
+
+# adicionar redis para guardar a sessão do google drive (assim quando o server vai abaixo não
+# é preciso estar sempre a ir fazer o login à mão)
+# depois, quando tiver isso tratado, é necessário alterar os urls e adicionar o webhook do twitter.
+# provavelmente também será necessário guardar essa sessão no redis
+# twitter_webhook_url = flask.url_for('/webhook/twitter', _external=True)
