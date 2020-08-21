@@ -2,11 +2,14 @@ from datetime import datetime
 import os
 import pickle
 import shutil
+import json
 
 import tweepy
 import requests
+from redis import Redis
 import flask
 from flask import Flask
+from google.oauth2.credentials import Credentials
 
 # Google Drive API
 from googleapiclient.discovery import build
@@ -17,6 +20,7 @@ from googleapiclient.http import MediaFileUpload
 
 SWITCH_HASTAG = "NintendoSwitch"
 DRIVE_CREDENTIALS_FILE = 'credentials.json'
+DRIVE_CREDENTIALS_PICKLE = 'token.pickle'
 
 SUCCESS_STATUS = 200
 
@@ -37,6 +41,10 @@ access_token = os.environ.get("ACCESS_TOKEN")
 access_secret = os.environ.get("ACCESS_TOKEN_SECRET")
 
 screenshots_save_folder = os.environ.get("GDRIVE_FOLDER_NAME")
+
+redis_url = os.environ.get("REDIS_URL", None)
+redis_client = None if redis_url is None else Redis.from_url(redis_url)
+
 print("All environment variables are set.")
 
 def get_and_save_gdrive_credentials():
@@ -148,25 +156,32 @@ def oauth2callback():
     authorization_response = flask.request.url
     flow.fetch_token(authorization_response=authorization_response)
 
-    # Store the credentials in the session.
-    # ACTION ITEM for developers:
-    #     Store user's access and refresh tokens in your data store if
-    #     incorporating this code into your real app.
     credentials = flow.credentials
-    
+    print(f"Credentials refresh_token: {credentials.refresh_token}")
+    save_gdrive_credentials(credentials)
+    return 'OK'
+
+def save_gdrive_credentials(credentials):
+    if redis_client is not None:
+        creds_pickle = pickle.dumps(credentials)
+        redis_client.mset({'gdrive_credentials': creds_pickle})
+
     with open('token.pickle', 'wb') as token:
         pickle.dump(credentials, token)
 
-    return 'OK'
-
-def get_gdrive_service():
-    creds = None
-    # The file token.pickle stores the user's access and refresh tokens, and is
-    # created automatically when the authorization flow completes for the first
-    # time.
+def load_gdrive_credentials():
+    result = None
     if os.path.exists('token.pickle'):
         with open('token.pickle', 'rb') as token:
-            creds = pickle.load(token)
+            result = pickle.load(token)
+    elif redis_client is not None:
+        creds_bytes = redis_client.mget('gdrive_credentials')[0]
+        result = pickle.loads(creds_bytes)
+
+    return result
+
+def get_gdrive_service():
+    creds = load_gdrive_credentials()
     # If there are no (valid) credentials available, let the user log in.
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
@@ -175,8 +190,7 @@ def get_gdrive_service():
             # Login required.
             return None
         # Save the credentials for the next run
-        with open('token.pickle', 'wb') as token:
-            pickle.dump(creds, token)
+        save_gdrive_credentials(creds)
     # return Google Drive API service
     return build('drive', 'v3', credentials=creds)
 
@@ -248,9 +262,3 @@ def download_new_tweet_media(delete_tweet):
     print("Files uploaded, cleaning tmp folder.")
     remove_tmp_directory()
     return '\n'.join(result)
-
-# adicionar redis para guardar a sessão do google drive (assim quando o server vai abaixo não
-# é preciso estar sempre a ir fazer o login à mão)
-# depois, quando tiver isso tratado, é necessário alterar os urls e adicionar o webhook do twitter.
-# provavelmente também será necessário guardar essa sessão no redis
-# twitter_webhook_url = flask.url_for('/webhook/twitter', _external=True)
