@@ -118,10 +118,8 @@ def verify_hastag_in_hashtags(tweet_hashtags):
     return False
 
 def get_game_name(tweet_hashtags):
-    if len(tweet_hashtags) == 2:
-        return tweet_hashtags[0]['text']
-    else:
-        return tweet_hashtags[1]['text']
+    name_index = len(tweet_hashtags) - 2
+    return tweet_hashtags[name_index]['text']
     
 @app.route('/authorize')
 def authorize():
