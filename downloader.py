@@ -4,12 +4,12 @@ import pickle
 import shutil
 import json
 
-import tweepy
 import requests
 from redis import Redis
 import flask
 from flask import Flask
 from google.oauth2.credentials import Credentials
+from twitter_handler import TwitterHandler
 
 # Google Drive API
 from googleapiclient.discovery import build
@@ -30,15 +30,10 @@ SCOPES = [
     ]
 
 print("Checking if all required environment variables are set")
-mandatory_vars = ['API_KEY', 'API_SECRET_KEY', 'ACCESS_TOKEN', 'ACCESS_TOKEN_SECRET', 'GDRIVE_FOLDER_NAME']
+mandatory_vars = ['API_KEY', 'API_SECRET_KEY', 'ACCESS_TOKEN', 'ACCESS_TOKEN_SECRET', 'GDRIVE_FOLDER_NAME', 'BEARER_TOKEN', 'TWITTER_ENV_NAME']
 for var in mandatory_vars:
     if var not in os.environ:
         raise EnvironmentError(f"Failed because {var} is not set.")
-
-consumer_key = os.environ.get("API_KEY")
-consumer_secret = os.environ.get("API_SECRET_KEY")
-access_token = os.environ.get("ACCESS_TOKEN")
-access_secret = os.environ.get("ACCESS_TOKEN_SECRET")
 
 screenshots_save_folder = os.environ.get("GDRIVE_FOLDER_NAME")
 
@@ -62,10 +57,15 @@ print("Checking if Google Drive credentials are set")
 get_and_save_gdrive_credentials()
 
 print("Authenticating the Twitter API")
-auth = tweepy.OAuthHandler(consumer_key, consumer_secret)
-auth.set_access_token(access_token, access_secret)
-
-api = tweepy.API(auth_handler=auth)
+twitter_handler_params = {
+    'CONSUMER_KEY' : os.environ.get('API_KEY'),
+    'CONSUMER_SECRET' : os.environ.get('API_SECRET_KEY'),
+    'ACCESS_TOKEN' : os.environ.get('ACCESS_TOKEN'),
+    'ACCESS_SECRET' : os.environ.get('ACCESS_TOKEN_SECRET'),
+    'BEARER_TOKEN': os.environ.get('BEARER_TOKEN'),
+    'TWITTER_ENV_NAME' : os.environ.get('TWITTER_ENV_NAME'),
+}
+twitter_handler = TwitterHandler(twitter_handler_params)
 print("Twitter API authenticated")
 
 app = Flask(__name__)
@@ -251,7 +251,7 @@ def remove_tmp_directory():
 def download_new_tweet_media(delete_tweet):
     delete_tweet = bool(delete_tweet)
     print(f"Received request to download tweet media, delete tweet after deleting? {delete_tweet}")
-    tweets = api.user_timeline(count=3)
+    tweets = twitter_handler.get_user_tweets(number_of_tweets=3)
     files = []
     for t in tweets:
         files += get_tweet_media(t, delete_tweet=delete_tweet)
