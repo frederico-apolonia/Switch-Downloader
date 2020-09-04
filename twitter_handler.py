@@ -1,11 +1,12 @@
 import tweepy
+import requests
 
 MANDATORY_KEYS = \
     ['API_KEY', 'API_SECRET_KEY', 'ACCESS_TOKEN', 'ACCESS_TOKEN_SECRET', 'BEARER_TOKEN', 'WEBHOOK_ENV_NAME']
 
 class TwitterHandler():
 
-    self.twitter_api = None
+    twitter_api: tweepy.API
 
     def __init__(self, twitter_params):
         for key in MANDATORY_KEYS:

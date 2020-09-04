@@ -8,29 +8,14 @@ import requests
 from redis import Redis
 import flask
 from flask import Flask
-from google.oauth2.credentials import Credentials
 from twitter_handler import TwitterHandler
-
-# Google Drive API
-from googleapiclient.discovery import build
-import google_auth_oauthlib.flow
-# from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
-from googleapiclient.http import MediaFileUpload
+from gdrive_handler import GDriveHandler, create_authorization_redirect
 
 SWITCH_HASTAG = "NintendoSwitch"
-DRIVE_CREDENTIALS_FILE = 'credentials.json'
-DRIVE_CREDENTIALS_PICKLE = 'token.pickle'
-
-SUCCESS_STATUS = 200
-
-SCOPES = [
-    'https://www.googleapis.com/auth/drive.metadata.readonly',
-    'https://www.googleapis.com/auth/drive.file',
-    ]
+TMP_FOLDER = 'tmp'
 
 print("Checking if all required environment variables are set")
-mandatory_vars = ['API_KEY', 'API_SECRET_KEY', 'ACCESS_TOKEN', 'ACCESS_TOKEN_SECRET', 'GDRIVE_FOLDER_NAME', 'BEARER_TOKEN', 'TWITTER_ENV_NAME']
+mandatory_vars = ['TWITTER_API_KEY', 'TWITTER_API_SECRET_KEY', 'TWITTER_ACCESS_TOKEN', 'TWITTER_ACCESS_TOKEN_SECRET', 'TWITTER_BEARER_TOKEN', 'TWITTER_ENV_NAME', 'GDRIVE_FOLDER_NAME', 'GDRIVE_CREDENTIALS']
 for var in mandatory_vars:
     if var not in os.environ:
         raise EnvironmentError(f"Failed because {var} is not set.")
@@ -42,39 +27,32 @@ redis_client = None if redis_url is None else Redis.from_url(redis_url)
 
 print("All environment variables are set.")
 
-def get_and_save_gdrive_credentials():
-    if not os.path.exists(DRIVE_CREDENTIALS_FILE):
-        if 'GDRIVE_CREDENTIALS' not in os.environ:
-            raise EnvironmentError(f"Failed to fetch Google Drive credentials because GDRIVE_CREDENTIALS is not set.")
-        json = os.environ.get("GDRIVE_CREDENTIALS")
-        with open(DRIVE_CREDENTIALS_FILE, 'w') as f:
-            f.write(json)
-        print("Fetched and saved credentials.json")
-    else:
-        print("credentials.json is already present.")
-
-print("Checking if Google Drive credentials are set")
-get_and_save_gdrive_credentials()
-
 print("Authenticating the Twitter API")
 twitter_handler_params = {
-    'CONSUMER_KEY' : os.environ.get('API_KEY'),
-    'CONSUMER_SECRET' : os.environ.get('API_SECRET_KEY'),
-    'ACCESS_TOKEN' : os.environ.get('ACCESS_TOKEN'),
-    'ACCESS_SECRET' : os.environ.get('ACCESS_TOKEN_SECRET'),
-    'BEARER_TOKEN': os.environ.get('BEARER_TOKEN'),
-    'TWITTER_ENV_NAME' : os.environ.get('TWITTER_ENV_NAME'),
+    'CONSUMER_KEY': os.environ.get('TWITTER_API_KEY'),
+    'CONSUMER_SECRET': os.environ.get('TWITTER_API_SECRET_KEY'),
+    'ACCESS_TOKEN': os.environ.get('TWITTER_ACCESS_TOKEN'),
+    'ACCESS_SECRET': os.environ.get('TWITTER_ACCESS_TOKEN_SECRET'),
+    'BEARER_TOKEN': os.environ.get('TWITTER_BEARER_TOKEN'),
+    'WEBHOOK_ENV_NAME': os.environ.get('TWITTER_ENV_NAME'),
 }
 twitter_handler = TwitterHandler(twitter_handler_params)
 print("Twitter API authenticated")
+
+gdrive_params = {
+    'CREDENTIALS': os.environ.get('GDRIVE_CREDENTIALS'),
+    'FOLDER_NAME': os.environ.get('GDRIVE_FOLDER_NAME'),
+    'REDIS': redis_client
+}
+gdrive_handler = GDriveHandler(gdrive_params)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("APP_SECRET")
 
 def save_media(filename, raw_data):
-    if not os.path.exists('tmp'):
-        os.makedirs('tmp')
-    with open(os.path.join('tmp', filename), 'wb') as f:
+    if not os.path.exists(TMP_FOLDER):
+        os.makedirs(TMP_FOLDER)
+    with open(os.path.join(TMP_FOLDER, filename), 'wb') as f:
         shutil.copyfileobj(raw_data, f)
 
 def get_tweet_media(tweet_status, delete_tweet=False):
@@ -102,7 +80,7 @@ def get_tweet_media(tweet_status, delete_tweet=False):
             file_extension = media_url.split('/')[-1].split('.')[-1][:3]
             filename = "-".join([game_name, current_time.strftime("%d-%m-%Y-%H%M%S"), str(count)]) + '.' + file_extension
             request = requests.get(media_url, stream=True)
-            if request.status_code == SUCCESS_STATUS:
+            if request.ok:
                 request.raw.decode_content = True
                 save_media(filename, request.raw)
                 result.append((filename, request.headers['content-type']))
@@ -123,22 +101,9 @@ def get_game_name(tweet_hashtags):
     
 @app.route('/authorize')
 def authorize():
-    # Create a flow instance to manage the OAuth 2.0 Authorization Grant Flow
-    # steps.
-    flow = google_auth_oauthlib.flow.Flow.from_client_secrets_file(
-        DRIVE_CREDENTIALS_FILE, scopes=SCOPES)
-    flow.redirect_uri = flask.url_for('oauth2callback', _external=True)
-    authorization_url, state = flow.authorization_url(
-        # This parameter enables offline access which gives your application
-        # both an access and refresh token.
-        access_type='offline',
-        # This parameter enables incremental auth.
-        include_granted_scopes='true')
-
-    # Store the state in the session so that the callback can verify that
-    # the authorization server response.
+    redirect_uri = flask.url_for('oauth2callback', _external=True)
+    authorization_url, state = create_authorization_redirect(redirect_uri)
     flask.session['state'] = state
-
     return flask.redirect(authorization_url)
 
 @app.route('/oauth2callback')
@@ -146,88 +111,23 @@ def oauth2callback():
     # Specify the state when creating the flow in the callback so that it can
     # verify the authorization server response.
     state = flask.session['state']
-    flow = google_auth_oauthlib.flow.Flow.from_client_secrets_file(
-        DRIVE_CREDENTIALS_FILE, scopes=SCOPES, state=state)
-    flow.redirect_uri = flask.url_for('oauth2callback', _external=True)
-
-    # Use the authorization server's response to fetch the OAuth 2.0 tokens.
+    redirect_uri = flask.url_for('oauth2callback', _external=True)
     authorization_response = flask.request.url
-    flow.fetch_token(authorization_response=authorization_response)
 
-    credentials = flow.credentials
-    print(f"Credentials refresh_token: {credentials.refresh_token}")
-    save_gdrive_credentials(credentials)
+    gdrive_handler.fetch_and_save_credentials(state, redirect_uri, authorization_response)
     return 'OK'
-
-def save_gdrive_credentials(credentials):
-    if redis_client is not None:
-        creds_pickle = pickle.dumps(credentials)
-        redis_client.mset({'gdrive_credentials': creds_pickle})
-
-    with open('token.pickle', 'wb') as token:
-        pickle.dump(credentials, token)
-
-def load_gdrive_credentials():
-    result = None
-    if os.path.exists('token.pickle'):
-        with open('token.pickle', 'rb') as token:
-            result = pickle.load(token)
-    elif redis_client is not None:
-        creds_bytes = redis_client.mget('gdrive_credentials')[0]
-        result = pickle.loads(creds_bytes)
-
-    return result
-
-def get_gdrive_service():
-    creds = load_gdrive_credentials()
-    # If there are no (valid) credentials available, let the user log in.
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            # Login required.
-            return None
-        # Save the credentials for the next run
-        save_gdrive_credentials(creds)
-    # return Google Drive API service
-    return build('drive', 'v3', credentials=creds)
-
-def get_folder_id(gdrive_service):
-    page_token = None
-    query = f"mimeType='application/vnd.google-apps.folder' and name = '{screenshots_save_folder}'"
-    while True:
-        response = gdrive_service.files().list(q=query,
-                                            spaces='drive',
-                                            fields='nextPageToken, files(id, name)',
-                                            pageToken=page_token).execute()
-        for file in response.get('files', []):
-            return file.get('id', None)
-        page_token = response.get('nextPageToken', None)
-        if page_token is None:
-            return None
-
-def create_gdrive_folder(gdrive_service):
-    file_metadata = {
-        'name': screenshots_save_folder,
-        'mimeType': 'application/vnd.google-apps.folder'
-    }
-    file = gdrive_service.files().create(body=file_metadata,
-                                        fields='id').execute()
-    return file.get('id')
 
 def upload_files(files):
     print("Uploading the following files: " + str(files))
     # authenticate the user
-    gdrive_service = get_gdrive_service()
-    if gdrive_service is None:
+    if not gdrive_handler.set_gdrive_service():
         print("Failed to authenticate the user in Google Drive!")
         return ['Failed to authenticate user in Google Drive, login required.']
 
     # check if folder exists, if so, grab the id and continue, else create it
-    folder_id = get_folder_id(gdrive_service)
-    
+    folder_id = gdrive_handler.get_screenshots_folder_id()
     if folder_id is None:
-        folder_id = create_gdrive_folder(gdrive_service)
+        folder_id = gdrive_handler.create_screenshots_folder()
 
     result = []
     for filename, content_type in files:
@@ -235,16 +135,19 @@ def upload_files(files):
             'name': filename,
             'parents': [folder_id],
         }
-        media = MediaFileUpload(os.path.join('tmp', filename), mimetype=content_type, resumable=True)
-        gdrive_service.files().create(body=file_metadata,
-                                    media_body=media,
-                                    fields='id').execute()
+        filepath = os.path.join(TMP_FOLDER, filename)
+        gdrive_handler.upload_file_to_screenshot_folder(filepath, file_metadata, content_type)
         result.append(f'Uploaded {filename}')
     return result
 
 def remove_tmp_directory():
-    if os.path.exists('tmp'):
-        shutil.rmtree('tmp')
+    if os.path.exists(TMP_FOLDER):
+        shutil.rmtree(TMP_FOLDER)
+
+@app.route('/webhook/twitter', methods=['POST'])
+def twitter_webhook_handler():
+    print("Hello!! Recieved a tweet post notification!!")
+    pass
 
 @app.route('/', defaults={'delete_tweet': ''}, methods=['POST'])
 @app.route('/<string:delete_tweet>', methods=['POST'])
